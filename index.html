@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OASIS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:#020b14;--c:#3de8ff;--dim:#0b3a4d;--mut:#5fa8bd}
+body[data-state=thinking]{--c:#ffb347;--dim:#4d3a0b}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:radial-gradient(circle at 50% 38%,#07293f,var(--bg) 72%);color:var(--c);font-family:"Rajdhani","Segoe UI",system-ui,sans-serif;overflow:hidden;transition:color .4s}
+body{display:flex;flex-direction:column;align-items:center;gap:10px;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 14px)}
+header{width:100%;max-width:440px;display:flex;justify-content:space-between;align-items:baseline}
+h1{font-size:22px;letter-spacing:.45em;font-weight:700}
+#clock{font-size:18px;color:var(--mut);letter-spacing:.1em;font-variant-numeric:tabular-nums}
+canvas{width:min(80vw,34dvh);aspect-ratio:1;opacity:0;transform:scale(.82);transition:opacity 1.6s ease,transform 1.6s cubic-bezier(.2,.8,.2,1)}
+body.ready canvas{opacity:1;transform:none}
+#status{font-size:16px;letter-spacing:.12em;color:var(--mut);min-height:22px}
+.stats{width:100%;max-width:440px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.st{border-top:1px solid var(--dim);padding-top:5px;font-size:13px;color:var(--mut);display:grid;grid-template-columns:1fr auto;row-gap:4px}
+.st b{color:var(--c);font-weight:600;font-variant-numeric:tabular-nums}
+.st u{grid-column:1/3;display:block;height:3px;background:var(--dim)}
+.st i{display:block;height:100%;width:30%;background:var(--c);transition:width .8s}
+#log{flex:1;min-height:0;width:100%;max-width:440px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;font-size:17px;line-height:1.3;padding:6px 2px;-webkit-mask-image:linear-gradient(transparent,#000 14%);mask-image:linear-gradient(transparent,#000 14%)}
+.m{max-width:88%}
+.me{align-self:flex-end;color:var(--mut);text-align:right}
+.ai{border-left:2px solid var(--c);padding-left:10px}
+.sys{color:var(--mut);font-size:14px}
+form{width:100%;max-width:440px;display:flex;gap:8px}
+input{flex:1;min-width:0;font:inherit;font-size:17px;color:#d8faff;background:#3de8ff10;border:1px solid var(--dim);border-radius:999px;padding:11px 18px;outline:none}
+input:focus{border-color:var(--c)}
+button{flex:none;width:46px;height:46px;border-radius:50%;font:inherit;font-size:20px;font-weight:700;color:var(--c);background:transparent;border:1.5px solid var(--c);box-shadow:0 0 14px #3de8ff33,inset 0 0 10px #3de8ff1a;cursor:pointer}
+button.on{background:var(--c);color:var(--bg)}
+button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+</style>
+</head>
+<body data-state="boot">
+<header><h1>OASIS</h1><div id="clock">--:--:--</div></header>
+<canvas id="hud"></canvas>
+<div id="status">&nbsp;</div>
+<div class="stats">
+  <div class="st" id="cpu"><span>YADRO</span><b>0%</b><u><i></i></u></div>
+  <div class="st" id="ram"><span>XOTIRA</span><b>0%</b><u><i></i></u></div>
+  <div class="st" id="net"><span>ALOQA</span><b>0%</b><u><i></i></u></div>
+</div>
+<div id="log" aria-live="polite"></div>
+<form id="f">
+  <button type="button" id="mic" aria-label="Mikrofon">&#9679;</button>
+  <input id="txt" placeholder="Buyruq yozing yoki gapiring" autocomplete="off">
+  <button type="submit" aria-label="Yuborish">&#10148;</button>
+</form>
+<script>
+const $=s=>document.querySelector(s);
+const tg=window.Telegram&&Telegram.WebApp;
+const BACKEND_URL="/api/chat";
+const name=(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user&&tg.initDataUnsafe.user.first_name)||"do'stim";
+const RM=matchMedia("(prefers-reduced-motion:reduce)").matches;
+if(tg){tg.ready();tg.expand();tg.disableVerticalSwipes&&tg.disableVerticalSwipes();tg.setHeaderColor&&tg.setHeaderColor("#020b14");tg.setBackgroundColor&&tg.setBackgroundColor("#020b14")}
+const buzz=k=>tg&&tg.HapticFeedback&&tg.HapticFeedback.impactOccurred(k||"light");
+
+/* ---------- holat ---------- */
+let state="boot",t=0,level=0;
+const levels=new Float32Array(64);
+const LABEL={idle:"Tizim tayyor",listening:"Tinglayapman…",thinking:"O'ylayapman…",speaking:"Javob beryapman"};
+function setState(s){state=s;document.body.dataset.state=s;if(LABEL[s])$("#status").textContent=LABEL[s]}
+
+/* ---------- HUD canvas ---------- */
+const cv=$("#hud"),g=cv.getContext("2d");let W=300;
+function fit(){const r=cv.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);W=r.width||300;cv.width=cv.height=W*d;g.setTransform(d,0,0,d,0,0)}
+addEventListener("resize",fit);fit();
+const P=Array.from({length:40},()=>({a:Math.random()*6.283,r:.55+Math.random()*.36,s:(Math.random()-.5)*.8}));
+function arc(c,r,a0,a1,w,col,al){g.strokeStyle=`rgba(${col},${al})`;g.lineWidth=w;g.beginPath();g.arc(c,c,r,a0,a1);g.stroke()}
+let analyser=null,buf=null;
+function upd(){
+  if(analyser){analyser.getByteFrequencyData(buf);for(let i=0;i<64;i++)levels[i]+=(buf[(i*buf.length/64)|0]/255-levels[i])*.4}
+  else{const amp={listening:.5,speaking:.6,thinking:.18,boot:.1}[state]||.05;for(let i=0;i<64;i++){const n=Math.abs(Math.sin(t*3+i*.7)*Math.sin(t*1.3+i*.21));levels[i]+=(n*amp-levels[i])*.18}}
+  level=levels.reduce((a,b)=>a+b,0)/64;
+}
+function draw(){
+  const c=W/2,R=c-4,sp=({boot:1.4,idle:1,listening:1.8,thinking:3.2,speaking:1.6}[state]||1)*(RM?.15:1);
+  t+=.016*sp;upd();
+  const col=state==="thinking"?"255,179,71":"61,232,255";
+  g.clearRect(0,0,W,W);
+  g.save();g.translate(c,c);g.rotate(t*.12);
+  for(let i=0;i<120;i++){const a=i/120*6.2832,L=i%5===0,k=Math.cos(a),s=Math.sin(a);g.strokeStyle=`rgba(${col},${L?.9:.35})`;g.lineWidth=L?2:1;g.beginPath();g.moveTo(k*R*.94,s*R*.94);g.lineTo(k*R*(L?1:.97),s*R*(L?1:.97));g.stroke()}
+  g.restore();
+  arc(c,R*.82,0,6.283,1,col,.2);
+  for(let i=0;i<6;i++){const a=-t*.4+i*1.047;arc(c,R*.82,a,a+.7,5,col,.55)}
+  arc(c,R*.42,0,6.283,1,col,.25);
+  for(let i=0;i<4;i++){const a=t*.9+i*1.5708;arc(c,R*.42,a,a+1.1,3,col,.85)}
+  const sw=t*1.2;
+  for(let k=0;k<20;k++){g.fillStyle=`rgba(${col},${(1-k/20)*.13})`;g.beginPath();g.moveTo(c,c);g.arc(c,c,R*.8,sw-(k+1)*.05,sw-k*.05);g.closePath();g.fill()}
+  for(let i=0;i<64;i++){const a=i/64*6.2832-1.5708,l=3+levels[i]*R*.24,r0=R*.5;g.strokeStyle=`rgba(${col},${.35+levels[i]*.6})`;g.lineWidth=2.4;g.beginPath();g.moveTo(c+Math.cos(a)*r0,c+Math.sin(a)*r0);g.lineTo(c+Math.cos(a)*(r0+l),c+Math.sin(a)*(r0+l));g.stroke()}
+  g.fillStyle=`rgba(${col},.7)`;
+  for(const p of P){p.a+=p.s*.01*sp;g.fillRect(c+Math.cos(p.a)*R*p.r-1,c+Math.sin(p.a)*R*p.r-1,2,2)}
+  const cr=R*(.24+level*.14)*(1+Math.sin(t*2)*.04),gr=g.createRadialGradient(c,c,0,c,c,cr);
+  gr.addColorStop(0,`rgba(${col},.95)`);gr.addColorStop(.5,`rgba(${col},.32)`);gr.addColorStop(1,`rgba(${col},0)`);
+  g.fillStyle=gr;g.beginPath();g.arc(c,c,cr,0,6.283);g.fill();
+  g.fillStyle="rgba(230,253,255,.95)";g.beginPath();g.arc(c,c,R*.045,0,6.283);g.fill();
+  requestAnimationFrame(draw);
+}
+draw();
+
+/* ---------- soat va ko'rsatkichlar ---------- */
+setInterval(()=>{$("#clock").textContent=new Date().toLocaleTimeString("en-GB")},1000);
+const S={cpu:.3,ram:.55,net:.7};
+setInterval(()=>{for(const k in S){S[k]=Math.min(.98,Math.max(.08,S[k]+(Math.random()-.5)*(state==="thinking"?.4:.14)));$("#"+k+" b").textContent=Math.round(S[k]*100)+"%";$("#"+k+" i").style.width=S[k]*100+"%"}},900);
+
+/* ---------- chat ---------- */
+const log=$("#log");
+function msg(cls,text){const d=document.createElement("div");d.className="m "+cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
+function typeOut(text){return new Promise(res=>{const d=msg("ai","");let i=0;const iv=setInterval(()=>{d.textContent=text.slice(0,++i);log.scrollTop=log.scrollHeight;if(i>=text.length){clearInterval(iv);res()}},RM?0:22)})}
+function local(q){q=q.toLowerCase();
+  if(/salom|assalom|hello|hi\b/.test(q))return `Salom, ${name}. Sizga qanday yordam bera olaman?`;
+  if(/soat|vaqt/.test(q))return "Hozir soat "+new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})+".";
+  if(/sana|bugun/.test(q))return "Bugun "+new Date().toLocaleDateString("uz-UZ",{day:"numeric",month:"long",year:"numeric"})+".";
+  if(/kimsan|isming|o'zingni/.test(q))return "Men OASIS, sizning shaxsiy yordamchingizman.";
+  return "Buyruq qabul qilindi. Server hali ulanmagan, shuning uchun hozircha faqat oddiy savollarga javob beraman.";
+}
+function speak(text){
+  if(!window.speechSynthesis){setState("idle");return}
+  const u=new SpeechSynthesisUtterance(text);u.lang="uz-UZ";u.onend=u.onerror=()=>setState("idle");speechSynthesis.cancel();speechSynthesis.speak(u);
+}
+async function handle(text,spoken){
+  msg("me",text);setState("thinking");buzz();
+  let ans;
+  if(BACKEND_URL){
+    try{const r=await fetch(BACKEND_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,initData:tg?tg.initData:""})});ans=(await r.json()).reply}
+    catch(e){ans="Serverga ulanib bo'lmadi. Aloqani tekshiring."}
+  }else{await new Promise(r=>setTimeout(r,700));ans=local(text)}
+  setState("speaking");await typeOut(ans);
+  tg&&tg.HapticFeedback&&tg.HapticFeedback.notificationOccurred("success");
+  if(spoken)speak(ans);else setTimeout(()=>setState("idle"),500);
+}
+$("#f").onsubmit=e=>{e.preventDefault();const v=$("#txt").value.trim();if(v){$("#txt").value="";handle(v,false)}};
+
+/* ---------- mikrofon ---------- */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null,stream=null,actx=null;
+async function startMic(){try{stream=await navigator.mediaDevices.getUserMedia({audio:true});actx=new(window.AudioContext||webkitAudioContext)();const an=actx.createAnalyser();an.fftSize=128;actx.createMediaStreamSource(stream).connect(an);buf=new Uint8Array(an.frequencyBinCount);analyser=an}catch(e){analyser=null}}
+function stopMic(){analyser=null;stream&&stream.getTracks().forEach(x=>x.stop());actx&&actx.close().catch(()=>{});stream=actx=null}
+$("#mic").onclick=()=>{
+  if(rec){rec.stop();return}
+  if(!SR){msg("sys","Bu qurilmada ovoz aniqlash ishlamaydi. Matn orqali yozing.");return}
+  rec=new SR();rec.lang="uz-UZ";rec.interimResults=true;
+  let heard="";
+  rec.onresult=e=>{heard=Array.from(e.results).map(r=>r[0].transcript).join(" ");$("#txt").value=heard};
+  rec.onerror=e=>{if(e.error==="not-allowed")msg("sys","Mikrofonga ruxsat berilmagan.")};
+  rec.onend=()=>{rec=null;stopMic();$("#mic").classList.remove("on");$("#txt").value="";heard.trim()?handle(heard.trim(),true):setState("idle")};
+  rec.start();startMic();$("#mic").classList.add("on");setState("listening");buzz("medium");
+};
+
+/* ---------- ishga tushish ---------- */
+(async()=>{
+  const steps=["Yadro yuklanmoqda…","Neyron tarmoq tekshirilmoqda…","Ovoz moduli ulandi","Barcha tizimlar tayyor"];
+  requestAnimationFrame(()=>document.body.classList.add("ready"));
+  for(const s of steps){$("#status").textContent=s;await new Promise(r=>setTimeout(r,RM?100:650))}
+  setState("idle");buzz("medium");
+  await typeOut(`Xush kelibsiz, ${name}. OASIS xizmatingizda.`);
+})();
+</script>
+</body>
+</html>
